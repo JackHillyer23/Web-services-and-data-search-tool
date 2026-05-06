@@ -2,13 +2,11 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-
-# Ensure src/ is on the path when running from the project root.
-sys.path.insert(0, str(Path(__file__).parent))
-
 from crawler import crawl
 from indexer import InvertedIndex
 from search import find
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 # Logging configuration
 logging.basicConfig(
@@ -19,41 +17,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Default values
 DEFAULT_URL = "https://quotes.toscrape.com"
 DEFAULT_INDEX_PATH = Path(__file__).parent.parent / "data" / "index.json"
 
 
 # Command handlers
 def cmd_build(args: argparse.Namespace) -> None:
-    """Crawl *args.url* and write the inverted index to *args.output*.
-
-    Steps:
-      1. Crawl the site (BFS, politeness-limited).
-      2. Add each page to the InvertedIndex.
-      3. Compute TF-IDF scores across all documents.
-      4. Save the index to disk as JSON.
-    """
+    """Crawl the target site and build the inverted index"""
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
     print(f"\n[build] Starting crawl of {args.url}")
     print(f"[build] Index will be saved to: {output_path}\n")
 
     index = InvertedIndex()
-    pages_indexed = 0
+    count = 0
     for page in crawl(args.url, max_pages=args.max_pages):
         index.add_document(page["url"], page["text"])
-        pages_indexed += 1
-        print(f"  [{pages_indexed}] Indexed: {page['url']}")
-
-    if pages_indexed == 0:
+        count += 1
+        print(f"  [{count}] Indexed: {page['url']}")
+    if count == 0:
         print("\n[build] No pages were crawled. Check the URL and your connection.")
         sys.exit(1)
 
-    print(f"\n[build] Computing TF-IDF scores across {pages_indexed} page(s)...")
+    print(f"\n[build] Computing TF-IDF scores across {count} page(s)...")
     index.compute_tf_idf()
-
     index.save(output_path)
     stats = index.get_stats()
     print(f"\n[build] Done!")
@@ -63,11 +50,7 @@ def cmd_build(args: argparse.Namespace) -> None:
 
 
 def cmd_load(args: argparse.Namespace) -> None:
-    """Load the index from *args.index* and print confirmation.
-
-    This command is primarily useful for verifying the index file is valid
-    and not corrupted, without running a full search.
-    """
+    """Load the index from disk and print a summary"""
     index_path = Path(args.index)
     try:
         index = InvertedIndex.load(index_path)
@@ -84,7 +67,7 @@ def cmd_load(args: argparse.Namespace) -> None:
 
 
 def cmd_print(args: argparse.Namespace) -> None:
-    """Load and pretty-print the index contents."""
+    """Load and display the index contents"""
     index_path = Path(args.index)
     try:
         index = InvertedIndex.load(index_path)
@@ -92,12 +75,11 @@ def cmd_print(args: argparse.Namespace) -> None:
         print(f"\n[print] Error: Index file not found at {index_path}")
         print("[print] Run 'python main.py build' first.\n")
         sys.exit(1)
-
     index.print_index(max_terms=args.max_terms)
 
 
 def cmd_find(args: argparse.Namespace) -> None:
-    """Load the index and search for *args.query*."""
+    """Load the index and search for *args.query*"""
     index_path = Path(args.index)
     try:
         index = InvertedIndex.load(index_path)
@@ -112,7 +94,7 @@ def cmd_find(args: argparse.Namespace) -> None:
 
 # Argument parser
 def build_parser() -> argparse.ArgumentParser:
-    """Construct and return the top-level argument parser."""
+    """Build and return the CLI argument parser"""
     parser = argparse.ArgumentParser(
         prog="search-tool",
         description="A TF-IDF powered web search tool.",
@@ -139,6 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Limit crawl to N pages (useful for testing).",
     )
 
+
     # load
     p_load = subparsers.add_parser("load", help="Load and validate the index.")
     p_load.add_argument(
@@ -146,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_INDEX_PATH),
         help="Path to the index JSON file.",
     )
+
 
     # print
     p_print = subparsers.add_parser("print", help="Display index contents.")
@@ -161,6 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Maximum number of terms to display (default: 50).",
     )
+
 
     # find
     p_find = subparsers.add_parser("find", help="Search the index.")
@@ -185,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# Entry 
+# Entry point
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()

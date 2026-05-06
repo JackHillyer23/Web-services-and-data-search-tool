@@ -7,10 +7,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Regex that extracts sequences of word characters
+# Only matches letters and apostrophes e.g keeps words like "it's" together
 _TOKEN_RE = re.compile(r"[a-zA-Z']+")
 
-# Common English words that add noise to the index
+# some words filtered out before indexing to reduce noise
 STOP_WORDS: frozenset[str] = frozenset(
     {
         "a", "an", "the", "and", "or", "but", "in", "on", "at", "to",
@@ -28,47 +28,27 @@ STOP_WORDS: frozenset[str] = frozenset(
 
 # Tokenisation helpers
 def tokenise(text: str) -> list[str]:
-    """Split *text* into lowercase tokens, removing stop words.
-
-    Args:
-        text: Raw visible text extracted from a web page.
-
-    Returns:
-        List of lowercase word tokens (stop words excluded).
-
-    Example:
-        >>> tokenise("To be or not to be")
-        ['not']   # stop words removed; 'not' kept as it can be meaningful
-    """
+    """Lowercase and tokenise text, filtering out stop words and single characters"""
     tokens = _TOKEN_RE.findall(text.lower())
-    return [t for t in tokens if t not in STOP_WORDS and len(t) > 1]
+    return [t.strip("'") for t in tokens if t.strip("'") not in STOP_WORDS and len(t.strip("'")) > 1]
 
 
 
 # InvertedIndex class
 class InvertedIndex:
-    """An inverted index with TF-IDF scoring.
-
-    Attributes:
-        _index: Mapping of term → {url → {"count": int, "tf_idf": float}}.
-        _doc_count: Total number of documents (pages) in the index.
+    """Inverted index with TF-IDF scoring
+    Structure: { term -> { url -> { count, tf_idf } } }
+    A dict-of-dicts gives O(1) average lookup for both term and document
+    which is much faster than scanning a list for every query
     """
-
     def __init__(self) -> None:
-        # term → { url → { "count": int, "tf_idf": float } }
         self._index: dict[str, dict[str, dict[str, Any]]] = {}
         self._doc_count: int = 0
 
     # Building
     def add_document(self, url: str, text: str) -> None:
-        """Tokenise *text* and record term frequencies for *url*.
-
-        TF-IDF scores are **not** computed here; call
-        :meth:`compute_tf_idf` once all documents have been added.
-
-        Args:
-            url:  The document's URL (used as its unique identifier).
-            text: Visible text content of the page.
+        """Tokenise text and store term frequencies for url
+        TF-IDF scores are left at 0.0 until compute_tf_idf() is called
         """
         tokens = tokenise(text)
         if not tokens:
@@ -77,42 +57,35 @@ class InvertedIndex:
 
         self._doc_count += 1
         total_terms = len(tokens)
-
-        # Count raw term frequencies for this document.
         term_freq: dict[str, int] = {}
         for token in tokens:
             term_freq[token] = term_freq.get(token, 0) + 1
 
-        # Store count and a placeholder TF (TF-IDF computed later).
+        # Store count and a placeholder TF
         for term, count in term_freq.items():
             if term not in self._index:
                 self._index[term] = {}
             tf = count / total_terms
             self._index[term][url] = {"count": count, "tf": tf, "tf_idf": 0.0}
-
         logger.debug("Indexed %s (%d unique tokens).", url, len(term_freq))
 
     def compute_tf_idf(self) -> None:
-        """Compute and store TF-IDF scores for every (term, document) pair.
-
-        Must be called after *all* documents have been added via
-        :meth:`add_document`.
-
-        Complexity: O(T * D) where T = vocabulary size, D = docs per term.
+        """Compute TF-IDF scores across all documents
+        Must be called after all documents are added
+        Complexity: O(T * D) where T = vocab size, D = docs per term
+        TF  = count / total_terms  (normalises for document length)
+        IDF = log((N+1) / (df+1)) + 1  (smoothed to avoid division by zero)
         """
         N = self._doc_count
         if N == 0:
             return
 
-        for term, doc_map in self._index.items():
-            # Number of documents that contain this term.
-            df = len(doc_map)
-            # Smooth IDF: +1 avoids division-by-zero if df == N.
-            idf = math.log((N + 1) / (df + 1)) + 1
-            for url, stats in doc_map.items():
+        for term, docs in self._index.items():
+            df = len(docs)
+            idf = math.log((N + 1) / (df + 1)) + 1 #avoids division-by-zero if df == N
+            for url, stats in docs.items():
                 stats["tf_idf"] = round(stats["tf"] * idf, 6)
-                # Remove raw tf from stored data to keep the file clean.
-                stats.pop("tf", None)
+                stats.pop("tf", None) # remove raw tf as no longer needed
 
         logger.info("TF-IDF scores computed for %d terms.", len(self._index))
 
@@ -124,22 +97,23 @@ class InvertedIndex:
         operator: str = "OR",
         top_n: int = 10,
     ) -> list[dict[str, Any]]:
-        
-
+        """Search the index and return results ranked by TF-IDF score
+        operator="OR"  returns pages containing any query term
+        operator="AND" returns only pages containing all query terms
+        """
         query = query.strip()
         if not query:
             return []
 
         terms = tokenise(query)
         if not terms:
-            # Query consisted entirely of stop words or punctuation.
             return []
 
         operator = operator.upper()
         if operator not in ("AND", "OR"):
             raise ValueError(f"operator must be 'AND' or 'OR', got {operator!r}")
 
-        # Gather candidate document sets for each term.
+        # Build set of matching docs for each term
         term_doc_sets: list[set[str]] = []
         for term in terms:
             if term in self._index:
@@ -147,18 +121,18 @@ class InvertedIndex:
             else:
                 term_doc_sets.append(set())
 
-        # Determine which URLs to score.
+        # Determine which URLs to score
         if operator == "AND":
             if not term_doc_sets:
                 return []
-            candidate_urls = set.intersection(*term_doc_sets)
+            candidates = set.intersection(*term_doc_sets)
         else:  # OR
             if not term_doc_sets:
                 return []
-            candidate_urls = set.union(*term_doc_sets)
+            candidates = set.union(*term_doc_sets)
 
         results: list[dict[str, Any]] = []
-        for url in candidate_urls:
+        for url in candidates:
             score = 0.0
             term_counts: dict[str, int] = {}
             for term in terms:
@@ -168,17 +142,13 @@ class InvertedIndex:
                     term_counts[term] = entry["count"]
             results.append({"url": url, "score": round(score, 6), "term_counts": term_counts})
 
-        # Sort by descending TF-IDF score.
+        # sorted by descending TF-IDF score
         results.sort(key=lambda r: r["score"], reverse=True)
         return results[:top_n]
 
     def get_stats(self) -> dict[str, Any]:
-        """Return summary statistics about the index.
+        """Return summary statistics about the index"""
 
-        Returns:
-            Dict with keys ``total_terms``, ``total_documents``,
-            ``average_docs_per_term``.
-        """
         total_terms = len(self._index)
         total_docs = self._doc_count
         avg_docs = (
@@ -192,16 +162,11 @@ class InvertedIndex:
             "average_docs_per_term": round(avg_docs, 2),
         }
 
+
     # Persistence
-
     def save(self, path: str | Path) -> None:
-        """Serialise the index to a JSON file at *path*.
-
-        JSON is chosen over pickle for portability and human-readability —
-        the marker can open the file and inspect the structure directly.
-
-        Args:
-            path: Destination file path (will be created/overwritten).
+        """Save the index to a JSON file
+        JSON chosen as its human-readable and portable across Python versions
         """
         path = Path(path)
         payload = {
@@ -217,22 +182,12 @@ class InvertedIndex:
 
     @classmethod
     def load(cls, path: str | Path) -> "InvertedIndex":
-        """Deserialise an index from *path* and return a new instance.
-
-        Args:
-            path: Path to a JSON file previously created by :meth:`save`.
-
-        Returns:
-            A fully populated :class:`InvertedIndex` instance.
-
-        Raises:
-            FileNotFoundError: If *path* does not exist.
-            json.JSONDecodeError: If the file is malformed.
+        """Load an index from a JSON file and return a new InvertedIndex instance
+        gives FileNotFoundError if the path doesn't exist
         """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Index file not found: {path}")
-
         with path.open("r", encoding="utf-8") as fh:
             payload = json.load(fh)
 
@@ -251,12 +206,7 @@ class InvertedIndex:
 
     # Display
     def print_index(self, max_terms: int = 50) -> None:
-        """Print a human-readable summary of the index to stdout.
-
-        Args:
-            max_terms: Maximum number of terms to display (default 50).
-                       Prevents flooding the terminal for large indexes.
-        """
+        """Print a summary of the index to stdout, capped at max_terms entries"""
         stats = self.get_stats()
         print(f"\n{'='*60}")
         print(f"  INVERTED INDEX SUMMARY")
@@ -268,11 +218,11 @@ class InvertedIndex:
 
         terms = sorted(self._index.keys())[:max_terms]
         for term in terms:
-            doc_map = self._index[term]
-            top_url = max(doc_map, key=lambda u: doc_map[u]["tf_idf"])
-            top_score = doc_map[top_url]["tf_idf"]
+            docs = self._index[term]
+            top_url = max(docs, key=lambda u: docs[u]["tf_idf"])
+            top_score = docs[top_url]["tf_idf"]
             print(
-                f"  {term:<25} | {len(doc_map):>3} doc(s) | "
+                f"  {term:<25} | {len(docs):>3} doc(s) | "
                 f"top score: {top_score:.4f} | best: ...{top_url[-40:]}"
             )
 
