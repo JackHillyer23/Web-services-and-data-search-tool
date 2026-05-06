@@ -67,15 +67,33 @@ def cmd_load(args: argparse.Namespace) -> None:
 
 
 def cmd_print(args: argparse.Namespace) -> None:
-    """Load and display the index contents"""
+    """Print index summary or a specific word's entry"""
     index_path = Path(args.index)
     try:
         index = InvertedIndex.load(index_path)
     except FileNotFoundError:
-        print(f"\n[print] Error: Index file not found at {index_path}")
+        print(f"\n[print] Error: index file not found at {index_path}")
         print("[print] Run 'python main.py build' first.\n")
         sys.exit(1)
-    index.print_index(max_terms=args.max_terms)
+
+    if args.word:
+        # Print a specific word's index entry
+        word = args.word.lower()
+        if word not in index._index:
+            print(f"\n[print] '{word}' not found in index.\n")
+        else:
+            docs = index._index[word]
+            print(f"\n[print] Index entry for '{word}':")
+            print(f"  Appears in {len(docs)} document(s):\n")
+            for url, stats in sorted(docs.items(), 
+                                     key=lambda x: x[1]["tf_idf"], 
+                                     reverse=True):
+                print(f"  {url}")
+                print(f"    Count  : {stats['count']}")
+                print(f"    TF-IDF : {stats['tf_idf']:.6f}")
+            print()
+    else:
+        index.print_index(max_terms=args.max_terms)
 
 
 def cmd_find(args: argparse.Namespace) -> None:
@@ -132,19 +150,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
     # print
-    p_print = subparsers.add_parser("print", help="Display index contents.")
+    p_print = subparsers.add_parser(
+        "print", 
+        help="Display index contents or a specific word.")
     p_print.add_argument(
-        "--index",
+        "word", 
+        nargs="?", 
+        default=None,
+        help="Optional word to look up in the index.")
+    p_print.add_argument(
+        "--index", 
         default=str(DEFAULT_INDEX_PATH),
-        help="Path to the index JSON file.",
-    )
+        help="Path to the index JSON file.")
     p_print.add_argument(
-        "--max-terms",
-        type=int,
-        default=50,
+        "--max-terms", 
+        type=int, 
+        default=50, 
         metavar="N",
-        help="Maximum number of terms to display (default: 50).",
-    )
+        help="Maximum number of terms to display (default: 50).")
 
 
     # find
