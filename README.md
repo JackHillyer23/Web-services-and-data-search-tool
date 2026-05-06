@@ -217,3 +217,10 @@ The compiled index (data/index.json) was built from a full crawl of quotes.toscr
 ## GenAI Usage Declaration
 
 This project was built with AI assistance (Claude, Anthropic) as required by the assessment brief (GREEN rating). AI was used as a primary tool throughout development for code generation, debugging, and refactoring. The code was subsequently reviewed, personalised, and modified — including identifying and fixing a trailing slash URL deduplication bug and an apostrophe tokenisation edge case. See the video demonstration for a full critical evaluation of AI usage, including specific examples where AI helped, where output required correction, and reflections on the impact on learning.
+
+---
+
+## References
+- Python Requests documentation: https://docs.python-requests.org
+- BeautifulSoup documentation: https://www.crummy.com/software/BeautifulSoup/bs4/doc/
+- Target website: https://quotes.toscrape.com
